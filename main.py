@@ -6,6 +6,12 @@ from typing import Optional, List
 from pydantic import BaseModel, Field
 from jwt_manager import create_token, validate_token
 from fastapi import HTTPException
+from config.database import Session, engine, Base
+from models.movies import Movies as MoviModel
+from models.user import User as UserModel
+
+
+
 
 
 class Movies(BaseModel):
@@ -58,6 +64,8 @@ app.title = "Movies API"
 # Para cambiar la version de la aplicacion
 app.version = "0.0.1"
 
+Base.metadata.create_all(bind=engine)
+
 # los tags nos permite agrupar las rutas de la aplicacion
 
 
@@ -102,12 +110,12 @@ def movie_category(category: str = Query(min_length=5)) -> List[Movies]:
 
 @app.post("/movies", tags=["Movies"], response_model=dict, status_code=201)
 def movie_create(movie: Movies) -> dict:
+
     try:
-        with open("db.json", 'r+') as file:
-            data = json.load(file)
-            data["movies"].append(movie.dict())
-            file.seek(0)
-            json.dump(data, file, indent=4)
+        db = Session()
+        new_movie =MoviModel(**movie.dict()) #Usamos ** para extraer los atributos para no pasarlos uno por uno manualmente
+        db.add(new_movie)
+        db.commit()
         return {"Mensaje": "Pelicula creada"}
     except StopIteration:
         return {"Error": "Pelicula no creada"}
