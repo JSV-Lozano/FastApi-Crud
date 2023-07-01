@@ -2,16 +2,15 @@ import json
 from fastapi import FastAPI, Body, Path, Query, Request, Depends
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.security import HTTPBearer
-from typing import Optional, List
-from pydantic import BaseModel, Field
-from jwt_manager import create_token, validate_token
 from fastapi import HTTPException
+from fastapi.encoders import jsonable_encoder
+from typing import Optional, List
+from pydantic import BaseModel, Field, validator, ValidationError
+from jwt_manager import create_token, validate_token
 from config.database import Session, engine, Base
 from models.movies import Movies as MoviModel
 from models.user import User as UserModel
-
-
-
+from sqlalchemy.orm.exc import NoResultFound
 
 
 class Movies(BaseModel):
@@ -33,6 +32,12 @@ class Movies(BaseModel):
                 "category": "Action"
             }
         }
+
+    @validator('title', 'overview', 'year', 'rating', 'category')
+    def validate_empty_values(cls, value):
+        if not value:
+            raise ValueError("El valor no puede estar vacío")
+        return value
 
 
 class User(BaseModel):
@@ -89,76 +94,80 @@ def login(user: User):
 
 @app.get("/movies", tags=["Movies"], response_model=List[Movies], status_code=200, dependencies=[Depends(JWTBearer())])
 def movie() -> List[Movies]:
-    return movies()
+    db = Session()
+    result = db.query(MoviModel).all()
+    return JSONResponse(content=jsonable_encoder(result), status_code=200)
 
 
 @app.get("/movies/{id}}", tags=["Movies"], response_model=Movies)
 def movie_id(id: int = Path(ge=0, le=100)) -> Movies:
     try:
-        return [movie for movie in movies() if movie["id"] == id]
-    except StopIteration:
-        return {"Error": "Pelicula no encontrada"}
+        db = Session()
+        if result := db.query(MoviModel).filter(MoviModel.id == id).first():
+            return JSONResponse(
+                content=jsonable_encoder(result), status_code=200)
+        else:
+            raise NoResultFound
+    except NoResultFound:
+        return JSONResponse(content={"Message": "Pelicula no encontrada"}, status_code=404)
 
 
 @app.get("/movies/", tags=["Movies"], response_model=List[Movies])
 def movie_category(category: str = Query(min_length=5)) -> List[Movies]:
     try:
-        return [movie for movie in movies() if movie["category"] == category]
-    except StopIteration:
-        return {"Error": "Pelicula no encontrada"}
+        db = Session()
+        if (
+            result := db.query(MoviModel)
+            .filter(MoviModel.category == category)
+            .all()
+        ):
+            return JSONResponse(content=jsonable_encoder(result), status_code=200)
+        else:
+            raise NoResultFound
+    except NoResultFound:
+        return JSONResponse(content={"Message": "Categoria no encontrada"}, status_code=404)
 
 
 @app.post("/movies", tags=["Movies"], response_model=dict, status_code=201)
 def movie_create(movie: Movies) -> dict:
-
     try:
         db = Session()
-        new_movie =MoviModel(**movie.dict()) #Usamos ** para extraer los atributos para no pasarlos uno por uno manualmente
+        # Usamos ** para extraer los atributos para no pasarlos uno por uno manualmente
+        new_movie = MoviModel(**movie.dict())
         db.add(new_movie)
         db.commit()
         return {"Mensaje": "Pelicula creada"}
-    except StopIteration:
-        return {"Error": "Pelicula no creada"}
+    except Exception as e:
+        return JSONResponse(content={"Mensaje": e}, status_code=400)
 
 
 @app.delete("/movies/{id}}", tags=["Movies"], response_model=dict)
 def movie_delete(id: int) -> dict:
     try:
-        with open("db.json", 'r+') as file:
-            data = json.load(file)
-            for movi in data["movies"]:
-                if movi["id"] == id:
-                    data["movies"].remove(movi)
-                    file.seek(0)
-                    json.dump(data, file, indent=4)
-                    return {"Mensaje": "Pelicula eliminada"}
-                else:
-                    return {"Error": "Pelicula no encontrada"}
-    except StopIteration:
-        return {"Error": "Pelicula no eliminada"}
-
-
-""" new_list = list(filter(lambda x: x["id"] != id, data["movies"]))
-            data["movies"] = new_list
-            file.seek(0)
-            json.dump(data, file, indent=4)
-            return {"Mensaje": "Pelicula eliminada"} """
+        db= Session()
+        result = db.query(MoviModel ).filter(MoviModel.id == id).first()
+        if not result:
+            raise NoResultFound
+        db.delete(result)
+        db.commit()
+        return JSONResponse(content={"Message": "Pelicula eliminada"}, status_code=200)
+    except NoResultFound:
+        return JSONResponse(content={"Message": "Pelicula no encontrada"}, status_code=404)
 
 
 @app.put("/movies/{id}}", tags=["Movies"], response_model=dict, status_code=200)
 def movie_update(id: int, movie: Movies) -> dict:
     try:
-        with open("db.json", 'r+') as file:
-            data = json.load(file)
-            for movi in data["movies"]:
-                if movi["id"] == id:
-                    movi["title"] = movie.title
-                    movi["overview"] = movie.overview
-                    movi["year"] = movie.year
-                    movi["rating"] = movie.rating
-                    movi["category"] = movie.category
-                    file.seek(0)
-                    json.dump(data, file, indent=4)
-                    return {"Mensaje": "Pelicula actualizada"}
-    except StopIteration:
-        return {"Error": "Pelicula no actualizada"}
+        db = Session()
+        result = db.query(MoviModel).filter(MoviModel.id == id).first()
+        if not result:
+            raise NoResultFound
+        result.title = movie.title
+        result.overview = movie.overview
+        result.year = movie.year
+        result.rating = movie.rating
+        result.category = movie.category
+        db.commit()
+        return JSONResponse(content={"Message": "Pelicula actualizada"}, status_code=200)
+    except NoResultFound:
+        return JSONResponse(content={"Message": "Pelicula no encontrada"}, status_code=404)
